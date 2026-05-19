@@ -1,127 +1,214 @@
+import pandas as pd
 import string
+import nltk
 import matplotlib.pyplot as plt
+
 from collections import Counter
-from nltk.tokenize import word_tokenize
+
 from nltk.corpus import stopwords
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.svm import LinearSVC
-from sklearn.metrics import classification_report
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report
+)
 
 from transformers import pipeline
 
-def read_text_file(file_path):
-    try:
-        with open(file_path, "r", encoding="utf-8") as file:
-            return file.read()
-    except FileNotFoundError:
-        print(f"Error: File '{file_path}' not found.")
-        return None
 
 
-text = read_text_file("read.txt")
-if text is None:
-    exit()
+nltk.download("stopwords")
+nltk.download("vader_lexicon")
+
+
+
+df = pd.read_csv("goemotions.csv")
+
+
+print(df.head())
+
+print("\nDataset Columns:")
+print(df.columns)
+
+
+
+
+texts = df["text"]
+labels = df["label"]
+
+
+
+stop_words = set(stopwords.words("english"))
+
 
 def preprocess_text(text):
-    lowercase = text.lower()
-    clean_text = lowercase.translate(str.maketrans("", "", string.punctuation))
-    return clean_text
+
+ 
+    text = text.lower()
+
+  
+    text = text.translate(
+        str.maketrans("", "", string.punctuation)
+    )
+
+ 
+    words = text.split()
+
+    filtered_words = [
+        word for word in words
+        if word not in stop_words
+    ]
+
+    return " ".join(filtered_words)
 
 
-def label_sentiments(text, emotion_dict):
-    final_words = []
-    sentiments = []
-    for word in word_tokenize(text, "english"):
-        if word not in stopwords.words("english"):
-            final_words.append(word)
-            sentiment = emotion_dict.get(word, "Neutral")
-            sentiments.append(sentiment)
-    return final_words, sentiments
+cleaned_texts = texts.apply(preprocess_text)
 
-
-emotion_dict = {}
-with open("emotions.txt", "r") as file:
-    for line in file:
-        clear_line = line.strip().replace(",", "").replace("'", "")
-        word, emotion = clear_line.split(":")
-        emotion_dict[word] = emotion
-
-clean_text = preprocess_text(text)
-final_words, sentiments = label_sentiments(clean_text, emotion_dict)
-
-
-tfidf_vectorizer = TfidfVectorizer(max_features=1000)
-X = tfidf_vectorizer.fit_transform(final_words)
-
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X, sentiments, test_size=0.2, random_state=42
+X_train_text, X_test_text, y_train, y_test = train_test_split(
+    cleaned_texts,
+    labels,
+    test_size=0.2,
+    random_state=42
 )
-svm_model = LinearSVC(dual=True) 
+
+print("\n==============================")
+print("SVM MODEL")
+print("==============================")
+
+tfidf = TfidfVectorizer(max_features=5000)
+
+X_train = tfidf.fit_transform(X_train_text)
+
+X_test = tfidf.transform(X_test_text)
+
+svm_model = LinearSVC()
+
 svm_model.fit(X_train, y_train)
 
+svm_predictions = svm_model.predict(X_test)
 
-print("=" * 60)
-print("1. SVM CLASSIFICATION REPORT")
-print("=" * 60)
-y_pred = svm_model.predict(X_test)
-print(classification_report(y_test, y_pred, zero_division=1))
+svm_accuracy = accuracy_score(y_test, svm_predictions)
 
+print("\nSVM Accuracy:", svm_accuracy)
 
-print("\n" + "=" * 60)
-print("2. BERT CLASSIFICATION REPORT")
-print("=" * 60)
-print("Loading Pre-trained Emotion BERT pipeline...")
+print("\nSVM Classification Report:\n")
 
-bert_classifier = pipeline("sentiment-analysis", model="bhadresh-savani/distilbert-base-uncased-emotion")
-
-raw_words_train, raw_words_test, labels_train, labels_test = train_test_split(
-    final_words, sentiments, test_size=0.2, random_state=42
+print(
+    classification_report(
+        y_test,
+        svm_predictions,
+        zero_division=1
+    )
 )
 
-print("Running inference using BERT on test words...")
-bert_raw_outputs = bert_classifier(raw_words_test)
 
-bert_preds = [res['label'].title() if res['label'] != 'joy' else 'Happy' for res in bert_raw_outputs]
+print("\n==============================")
+print("VADER MODEL")
+print("==============================")
 
-print(classification_report(labels_test, bert_preds, zero_division=1))
 
-def analyze_sentiment_vader(sentiment_text):
-    score = SentimentIntensityAnalyzer().polarity_scores(sentiment_text)
-    neg = score["neg"]
-    pos = score["pos"]
-    if neg > pos:
-        return "Negative Sentiment"
-    elif pos > neg:
-        return "Positive Sentiment"
+vader = SentimentIntensityAnalyzer()
+
+
+def vader_sentiment(text):
+
+    score = vader.polarity_scores(text)
+
+    compound = score["compound"]
+
+    if compound >= 0.05:
+        return "positive"
+
+    elif compound <= -0.05:
+        return "negative"
+
     else:
-        return "Neutral Vibe"
+        return "neutral"
 
 
-def analyze_sentiment_bert(sentiment_text):
-  
-    binary_bert = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
-    
-    truncated_text = " ".join(sentiment_text.split()[:400])
-    result = binary_bert(truncated_text)[0]
-    
-    return f"{result['label'].title()} Sentiment (Confidence: {result['score']:.4f})"
+print("\nSample VADER Predictions:\n")
+
+for text in X_test_text.head(5):
+
+    prediction = vader_sentiment(text)
+
+    print("Text:", text)
+
+    print("Prediction:", prediction)
+
+    print()
+
+print("\n==============================")
+print("BERT MODEL")
+print("==============================")
 
 
-print("\n" + "=" * 60)
-print("3. OVERALL DOCUMENT TEXT BENCHMARK")
-print("=" * 60)
+bert_model = pipeline(
+    "sentiment-analysis"
+)
 
-vader_result = analyze_sentiment_vader(clean_text)
-print("Overall Sentiment (VADER):", vader_result)
 
-bert_result = analyze_sentiment_bert(clean_text)
-print("Overall Sentiment (BERT): ", bert_result)
+print("\nSample BERT Predictions:\n")
 
-word_count = Counter(sentiments)
-fig, ax1 = plt.subplots()
-ax1.bar(word_count.keys(), word_count.values())
-fig.autofmt_xdate()
+for text in X_test_text.head(5):
+
+    result = bert_model(text)
+
+    print("Text:", text)
+
+    print("Prediction:", result)
+
+    print()
+
+
+print("\n==============================")
+print("CUSTOM TEXT ANALYSIS")
+print("==============================")
+
+user_text = input("\nEnter text:\n")
+
+
+clean_input = preprocess_text(user_text)
+
+vector_input = tfidf.transform([clean_input])
+
+svm_result = svm_model.predict(vector_input)
+
+print("\nSVM Prediction:", svm_result[0])
+
+
+vader_result = vader_sentiment(user_text)
+
+print("VADER Prediction:", vader_result)
+
+
+bert_result = bert_model(user_text)
+
+print("BERT Prediction:", bert_result)
+
+
+
+emotion_counts = Counter(labels)
+
+plt.figure(figsize=(10, 5))
+
+plt.bar(
+    emotion_counts.keys(),
+    emotion_counts.values()
+)
+
+plt.xticks(rotation=90)
+
+plt.title("Emotion Distribution in GoEmotions Dataset")
+
+plt.xlabel("Emotion")
+
+plt.ylabel("Count")
+
+plt.tight_layout()
+
 plt.show()
